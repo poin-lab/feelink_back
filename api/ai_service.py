@@ -14,7 +14,7 @@ conversations_memory = {}
 
 # --- 2.5. 대화 생성 설정 ---
 model = genai.GenerativeModel(
-    model_name='gemini-2.0-flash',
+    model_name='gemini-2.5-flash-lite',
     
     # --- 여기가 수정된 부분입니다! (균형 잡힌 버전) ---
     
