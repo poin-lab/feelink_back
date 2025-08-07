@@ -1,0 +1,27 @@
+venv/
+.venv/
+# Python virtual environments
+env/
+.env/
+
+# Python cache files
+# 파이썬이 실행 중 자동으로 생성하는 캐시 파일들입니다.
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
+# API 키, DB 비밀번호 등 민감 정보를 담는 파일입니다.
+# 보안상 절대!! git에 올리면 안 됩니다.
+.env
+*.env
+
+# IDE/Editor specific settings
+# VSCode, PyCharm 등 개인의 에디터 설정 파일입니다.
+.vscode/
+.idea/
+
+# Operating System files
+.DS_Store
+Thumbs.db
