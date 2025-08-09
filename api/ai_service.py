@@ -1,16 +1,22 @@
 import os
 import uuid
+
+# 외부 라이브러리
 import google.generativeai as genai
-from fastapi import UploadFile, HTTPException
+from fastapi import UploadFile, BackgroundTasks, HTTPException
+from sqlalchemy.orm import Session
 from dotenv import load_dotenv
+
+
+# 내부 모듈 (DB 연동 시 필요)
+
 
 # --- 1. Google Gemini 클라이언트 설정 ---
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# --- 2. '기억'을 저장할 서버 메모리 ---
-conversations_memory = {}
+
 
 # --- 2.5. 대화 생성 설정 ---
 model = genai.GenerativeModel(
@@ -50,29 +56,179 @@ model = genai.GenerativeModel(
 )
    
 
-# --- 대화 시작 로직 (예외 처리 없음) ---
-async def start_new_chat_session(image_file: UploadFile, user_question: str):
-    image_data = await image_file.read()
-    image_part = {"mime_type": image_file.content_type, "data": image_data}
-    prompt_parts = [image_part, user_question]
 
-    chat_session = model.start_chat(history=[])
+# --- 3. 이미지 처리 관련 함수 --- 
+async def _upload_image_to_storage(image_file: UploadFile) -> str: 
+    #   나중에 이 함수 내부를 실제 Azure Blob Storage 업로드 코드로 교체해야 합니다.
+    #   파일 이름에서 확장자를 추출하고, UUID를 생성하여 이미지 URL을 만듭니다.
+    file_extension = image_file.filename.split('.')[-1] if image_file.filename else 'png' 
+    
+    image_id = uuid.uuid4() # 이미지 ID 생성
+    image_url = "url주소" #이미지 url 생성
+    
+    # 개발 중 확인을 위한 로그
+    print(f"[IMAGE UPLOAD] '{image_file.filename}' -> {image_url}")
+    return image_url
+
+
+
+
+# --- 4. AI 상호작용 함수 ---
+
+async def _get_ai_response_and_history(image_part: dict, user_question: str, previous_history: list = None) -> tuple[str, list]:
+    """
+    [책임] Gemini AI 모델에 요청을 보내고, 답변과 전체 대화 기록을 받아옵니다.
+    [목적] AI와의 모든 통신을 이 함수 안에서만 처리하여 로직을 중앙 집중화합니다.
+
+    Args:
+        image_part (dict): 분석할 이미지 데이터. 첫 질문에만 사용됩니다.
+        user_question (str): 사용자의 질문.
+        previous_history (list, optional): 이전 대화 기록. 대화 이어가기 시 사용됩니다.
+
+    Returns:
+        tuple: (AI의 답변 텍스트, DB에 저장하기 좋은 형태로 변환된 전체 대화 기록)
+    """
+    if not model:
+        raise HTTPException(status_code=503, detail="AI 서비스가 현재 사용 불가능합니다.")
+
+    chat_session = model.start_chat(history=previous_history or [])
+    prompt_parts = [image_part, user_question] if image_part else [user_question]
+    
     response = await chat_session.send_message_async(prompt_parts)
     ai_answer = response.text
 
-    conversation_id = str(uuid.uuid4())
-    conversations_memory[conversation_id] = chat_session
-    
-    return {"conversation_id": conversation_id, "answer": ai_answer}
+    # Gemini 라이브러리의 history 객체는 직접 저장하기 복잡하므로,
+    # DB에 저장하기 쉬운 JSON(딕셔너리 리스트) 형태로 변환합니다.
+    history_to_save = [
+        {"role": msg.role, "parts": [part.text for part in msg.parts]}
+        for msg in chat_session.history
+    ]
 
-# --- 대화 이어가기 로직 (예외 처리 없음) ---
-async def continue_existing_chat(conversation_id: str, user_question: str):
-    if conversation_id not in conversations_memory:
-        # 이 부분은 예외 처리가 아니라, 필수적인 로직 검증입니다.
-        raise HTTPException(status_code=404, detail="대화 기록을 찾을 수 없습니다.")
+    return ai_answer, history_to_save
+
+
+# --- 5. 데이터베이스 상호작용 함수 ---
+
+async def _save_conversation_to_db(db: Session, log_data: dict):
+    """
+    [책임] 대화 기록을 데이터베이스에 새로 저장합니다.
+    [실행] 비동기(백그라운드)로 실행되어 사용자 응답 시간에 영향을 주지 않습니다.
+    """
+    try:
+        db_conversation = Conversation(
+            conversation_id=log_data["conversation_id"],
+            image_url=log_data["image_url"],
+            history=log_data["history"],
+            user_id=None # 로그인 기능 구현 전까지는 NULL
+        )
+        db.add(db_conversation)
+        db.commit()
+        db.refresh(db_conversation)
+        print(f"[DB SAVE] 대화 {log_data['conversation_id']}가 성공적으로 저장되었습니다.")
+    except Exception as e:
+        db.rollback()
+        print(f"[DB ERROR] 대화 저장 중 오류 발생: {e}")
+
+#   대화 기록 업데이트
+async def _update_conversation_in_db(db: Session, conv_id: uuid.UUID, updated_history: list):
+    """
+    [책임] 기존 대화 기록을 새로운 내용으로 업데이트합니다.
+    """
+    try:
+        conversation = db.query(Conversation).filter(Conversation.conversation_id == conv_id).first()
+        if conversation:
+            conversation.history = updated_history
+            db.commit()
+            print(f"[DB UPDATE] 대화 {conv_id}가 성공적으로 업데이트되었습니다.")
+    except Exception as e:
+        db.rollback()
+        print(f"[DB ERROR] 대화 업데이트 중 오류 발생: {e}")
+
+
+
+# --- 6. 핵심 서비스 로직 (API 라우터가 직접 호출하는 메인 함수들) ---
+
+async def start_new_chat_session(
+    db: Session, 
+    background_tasks: BackgroundTasks,
+    image_file: UploadFile, 
+    user_question: str
+):
+    """
+    [서비스] 새로운 대화를 시작하는 전체 과정을 조율(Orchestrate)합니다.
+    """
+    # 1. 고유한 대화 ID를 미리 생성합니다.
+    conversation_id = uuid.uuid4()
     
-    chat_session = conversations_memory[conversation_id]
-    response = await chat_session.send_message_async(user_question)
-    ai_answer = response.text
-    
-    return {"answer": ai_answer}
+    try:
+        # 2. 이미지 처리
+        image_url = await _upload_image_to_storage(image_file)
+        image_part = {"mime_type": image_file.content_type, "data": await image_file.read()}
+
+        # 3. AI 호출하여 답변과 대화 기록 얻기
+        ai_answer, history_to_save = await _get_ai_response_and_history(image_part, user_question)
+
+        # 4. DB에 저장할 데이터 묶음(로그) 생성
+        log_data = {
+            "conversation_id": conversation_id,
+            "image_url": image_url,
+            "history": history_to_save
+        }
+
+        # 5. DB 저장 작업을 '백그라운드'로 예약합니다.
+        #    사용자는 이 작업이 끝날 때까지 기다리지 않습니다.
+        background_tasks.add_task(_save_conversation_to_db, db, log_data)
+
+        # 6. 사용자에게 즉시 반환할 최종 응답을 만듭니다.
+        return {
+            "conversation_id": str(conversation_id),
+            "answer": ai_answer
+        }
+
+    except Exception as e:
+        # 모든 예외를 처리하여 서버가 다운되는 것을 방지합니다.
+        print(f"ERROR in start_new_chat_session: {e}")
+        raise HTTPException(status_code=500, detail=f"AI 서비스 처리 중 오류 발생: {str(e)}")
+
+
+async def continue_existing_chat(
+    db: Session,
+    background_tasks: BackgroundTasks,
+    conversation_id: str, 
+    user_question: str
+):
+    """
+    [서비스] 기존 대화를 이어가는 과정을 조율합니다.
+    """
+    try:
+        # 1. 문자열 ID를 UUID 객체로 변환하여 DB에서 조회
+        conv_uuid = uuid.UUID(conversation_id)
+        conversation = db.query(Conversation).filter(Conversation.conversation_id == conv_uuid).first()
+        
+        # 2. 대화 기록이 없으면 404 에러 발생
+        if not conversation:
+            raise HTTPException(status_code=404, detail="대화 기록을 찾을 수 없습니다.")
+
+        # 3. AI 호출 (이전 기록을 전달하고, 이미지는 보내지 않음)
+        ai_answer, updated_history = await _get_ai_response_and_history(
+            image_part=None, 
+            user_question=user_question, 
+            previous_history=conversation.history
+        )
+
+        # 4. DB 업데이트 작업을 백그라운드로 예약합니다.
+        background_tasks.add_task(_update_conversation_in_db, db, conv_uuid, updated_history)
+
+        # 5. 사용자에게 최종 응답을 만듭니다.
+        return {
+            "conversation_id": str(conversation_id),
+            "answer": ai_answer
+        }
+
+    except HTTPException as e:
+        # 이미 처리된 HTTP 예외는 그대로 다시 발생시킵니다.
+        raise e
+    except Exception as e:
+        # 그 외의 모든 예외를 처리합니다.
+        print(f"ERROR in continue_existing_chat: {e}")
+        raise HTTPException(status_code=500, detail=f"AI 서비스 처리 중 오류 발생: {str(e)}")
