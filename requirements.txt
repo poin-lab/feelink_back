@@ -1,46 +1,19 @@
-annotated-types
-anyio
-cachetools
-certifi
-charset-normalizer
-click
-colorama
-distro
-dotenv
-exceptiongroup
+# Web Framework
 fastapi
-google-ai-generativelanguage
-google-api-core
-google-api-python-client
-google-auth
-google-auth-httplib2
-google-generativeai
-googleapis-common-protos
-grpcio
-grpcio-status
-h11
-httpcore
-httplib2
-httpx
-idna
-jiter
-openai
-proto-plus
-protobuf
-pyasn1
-pyasn1_modules
-pydantic
-pydantic_core
-pyparsing
-python-dotenv
-python-multipart
-requests
-rsa
-sniffio
-starlette
-tqdm
-typing-inspection
-typing_extensions
-uritemplate
-urllib3
 uvicorn
+
+# WSGI Server (for Azure deployment)
+gunicorn
+
+# Environment Variables
+python-dotenv
+
+# Google AI
+google-generativeai
+
+# Database
+sqlalchemy
+psycopg2-binary  # PostgreSQL 사용 시
+
+# File Uploads
+python-multipart
