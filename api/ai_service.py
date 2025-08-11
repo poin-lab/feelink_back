@@ -9,8 +9,7 @@ load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# --- 2. '기억'을 저장할 서버 메모리 ---
-conversations_memory = {}
+
 
 # --- 2.5. 대화 생성 설정 ---
 model = genai.GenerativeModel(
@@ -59,20 +58,14 @@ async def start_new_chat_session(image_file: UploadFile, user_question: str):
     chat_session = model.start_chat(history=[])
     response = await chat_session.send_message_async(prompt_parts)
     ai_answer = response.text
-
     conversation_id = str(uuid.uuid4())
-    conversations_memory[conversation_id] = chat_session
     
     return {"conversation_id": conversation_id, "answer": ai_answer}
 
 # --- 대화 이어가기 로직 (예외 처리 없음) ---
-async def continue_existing_chat(conversation_id: str, user_question: str):
-    if conversation_id not in conversations_memory:
-        # 이 부분은 예외 처리가 아니라, 필수적인 로직 검증입니다.
-        raise HTTPException(status_code=404, detail="대화 기록을 찾을 수 없습니다.")
-    
-    chat_session = conversations_memory[conversation_id]
-    response = await chat_session.send_message_async(user_question)
-    ai_answer = response.text
-    
-    return {"answer": ai_answer}
+# async def continue_existing_chat(conversation_id: str, user_question: str):
+
+#     response = await chat_session.send_message_async(user_question)
+#     ai_answer = response.text
+
+#     return {"answer": ai_answer}
