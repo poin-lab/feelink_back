@@ -13,6 +13,9 @@ gunicorn
 # HTTP 클라이언트
 httpx
 
+# 이미지 처리
+PIL
+
 # --- 데이터베이스 (ORM & 드라이버) ---
 # Python 객체와 DB 테이블을 매핑해주는 비동기 지원 ORM (Object-Relational Mapper)
 SQLAlchemy
