@@ -16,6 +16,8 @@ from PIL import Image  # 이미지 파일을 열고, 검증하고, 다른 포맷
 # 스토리지 서비스는 현재 사용하지 않으므로 임포트에서 제외했습니다.
 from api import db_service , storage_service  # 데이터베이스 서비스 모듈을 가져옵니다.
 from api import notification_service  # 알림 서비스 모듈을 가져옵니다.
+
+from api.db_service import get_db_session  # 비동기 DB 세션을 관리하는 헬퍼 함수를 가져옵니다.
 # --- 기본 설정 ---
 # 로거 인스턴스 생성 (uvicorn 서버의 로거를 사용)
 log = logging.getLogger("uvicorn")
