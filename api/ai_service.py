@@ -109,46 +109,44 @@ async def _fetch_image_from_url(url: str) -> bytes:
 
 
 
+# --- 1. 백그라운드 작업을 위한 독립적인 헬퍼 함수 ---
 async def _background_upload_and_save(
     conversation_id: uuid.UUID,
     image_bytes: bytes,
     original_filename: str,
     initial_history: list
 ):
-    """
-    (백그라운드 실행용) 이미지를 업로드하고, 그 URL을 포함하여 DB에 저장합니다.
-    """
-    try:
-        # 1. 이미지 업로드 (백그라운드에서 실행)
-        image_url = await storage_service.upload_image_and_get_url(
-            file_bytes=image_bytes,
-            original_filename=original_filename
-        )
-        # 2. 업로드 완료 후, DB 저장 (백그라운드에서 실행)
-        await db_service.create_new_conversation(
-            conversation_id=conversation_id,
-            image_url=image_url,
-            initial_history=initial_history
-        )
-        log.info(f"[BG_TASK] 이미지 업로드 및 DB 저장 완료. cid={conversation_id}")
-    except Exception as e:
-        log.error(f"[BG_TASK] 백그라운드 작업 실패. cid={conversation_id}, error={e}")
+    """(백그라운드) 이미지를 업로드하고, 독립적인 DB 세션을 사용해 저장합니다."""
+    
+    # 이 작업은 이제 완전히 독립적인 DB 연결을 사용합니다.
+    async with get_db_session() as session:
+        try:
+            # 1. 백그라운드에서 이미지 업로드 실행
+            image_url = await storage_service.upload_image_and_get_url(
+                file_bytes=image_bytes,
+                original_filename=original_filename
+            )
+            # 2. 업로드 완료 후, 백그라운드에서 DB 저장 실행
+            await db_service.create_new_conversation(
+                session=session, # 생성된 세션을 명시적으로 전달
+                conversation_id=conversation_id,
+                image_url=image_url,
+                initial_history=initial_history
+            )
+            log.info(f"[BG_TASK] 이미지 업로드 및 DB 저장 완료. cid={conversation_id}")
+        except Exception as e:
+            log.error(f"[BG_TASK] 백그라운드 작업 실패. cid={conversation_id}, error={e}")
 
-# =====================================================================================
-# 핵심 서비스 핸들러 섹션: API 엔드포인트의 실제 로직을 처리하는 함수들
-# =====================================================================================
 
+# --- 2. 메인 서비스 함수 ---
 async def start_new_chat_session(
     background_tasks: BackgroundTasks,
     user_question: str,
     image_file: UploadFile,
 ):
     """
-    이미지 분석 후 즉시 응답하고, 이미지 업로드와 DB 저장은 백그라운드로 처리합니다.
+    [최종 버전] 이미지 분석 후 즉시 응답하고, 업로드와 저장은 백그라운드로 처리합니다.
     """
-    if not image_file:
-        raise HTTPException(status_code=400, detail="이미지 파일을 반드시 제공해야 합니다.")
-
     # 1. 이미지 바이트 데이터만 우선 읽어둡니다.
     try:
         image_bytes = await image_file.read()
@@ -156,7 +154,7 @@ async def start_new_chat_session(
         log.error(f"이미지 파일 읽기 실패: {e}")
         raise HTTPException(status_code=400, detail="이미지 파일을 읽을 수 없습니다.")
         
-    # 2. Gemini API 호출 (이 부분은 응답을 받아야 하므로 기다립니다)
+    # 2. Gemini API 호출 (사용자 응답을 위해 이 작업은 기다려야 함)
     try:
         image_part = _make_image_part(image_bytes)
         chat_session = model.start_chat(history=[])
@@ -173,8 +171,7 @@ async def start_new_chat_session(
         {"role": "model", "parts": [ai_answer]},
     ]
     
-    # ⭐️ [핵심] 위에서 만든 '_background_upload_and_save' 함수를 통째로 백그라운드 작업에 등록합니다.
-    #    필요한 모든 데이터를 인자로 넘겨줍니다.
+    # ⭐️ 이제 '업로드'와 '저장'을 모두 포함한 헬퍼 함수를 백그라운드로 보냅니다.
     background_tasks.add_task(
         _background_upload_and_save,
         conversation_id=conversation_id,
@@ -185,8 +182,7 @@ async def start_new_chat_session(
 
     log.info(f"[AI] /start_chat 응답 완료. 이미지 업로드 및 DB 저장을 백그라운드에서 실행합니다.")
     
-    # 4. 사용자에게 최종 응답 즉시 반환
-    # 이제 Storage 업로드를 기다리지 않으므로 응답이 훨씬 빨라집니다.
+    # 4. 사용자에게 최종 응답 즉시 반환 (매우 빠름)
     return {"conversation_id": str(conversation_id), "answer": ai_answer}
 
 
