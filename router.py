@@ -73,6 +73,11 @@ async def continue_chat_endpoint(
         user_question=user_question,
     )
 
+
+@router.post("/test") #start_chat으로 마찬가지로 분석한내용 이거는 ios로 알림 보내는거 지금 저장된 intial과 token으로
+
+
+
 @router.post("/register_device")
 async def register_device_endpoint(
     installation_id: str = Form(...),
