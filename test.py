@@ -1,28 +1,33 @@
+# 파일명: send_single_message.py
+
 import os
 import time
 import hmac
 import hashlib
 import base64
 import requests
-import xml.etree.ElementTree as ET
+import json
 from urllib.parse import quote_plus, urlparse
 from dotenv import load_dotenv
 
-# --- 환경 변수 로드 및 설정 ---
+# --- 환경 변수 로드 및 설정 (기존과 동일) ---
 load_dotenv()
 CONNECTION_STRING = os.getenv("AZURE_NOTIFICATION_HUB_CONNECTION_STRING")
 HUB_NAME = os.getenv("AZURE_NOTIFICATION_HUB_NAME")
 
 if not CONNECTION_STRING or not HUB_NAME:
-    raise ValueError("AZURE_NOTIFICATION_HUB_CONNECTION_STRING 또는 AZURE_NOTIFICATION_HUB_NAME 환경 변수를 확인해주세요.")
+    raise ValueError("환경 변수가 올바르게 설정되지 않았습니다.")
 
-parsed_conn_str = {key.lower(): value for key, value in (part.split('=', 1) for part in CONNECTION_STRING.split(';'))}
-NAMESPACE = urlparse(parsed_conn_str['endpoint']).hostname.split('.')[0]
-SAS_KEY_NAME = parsed_conn_str['sharedaccesskeyname']
-SAS_KEY_VALUE = parsed_conn_str['sharedaccesskey']
-API_VERSION = "2020-06"
+try:
+    parsed_conn_str = {key.lower(): value for key, value in (part.split('=', 1) for part in CONNECTION_STRING.split(';'))}
+    NAMESPACE = urlparse(parsed_conn_str['endpoint']).hostname.split('.')[0]
+    SAS_KEY_NAME = parsed_conn_str['sharedaccesskeyname']
+    SAS_KEY_VALUE = parsed_conn_str['sharedaccesskey']
+    API_VERSION = "2020-06"
+except (KeyError, IndexError):
+    raise ValueError("연결 문자열(Connection String)의 형식이 올바르지 않았습니다.")
 
-# --- SAS 토큰 생성 함수 ---
+# --- SAS 토큰 생성 함수 (기존과 동일) ---
 def generate_sas_token(uri, key_name, key_value):
     expiry = int(time.time()) + 3600
     string_to_sign = quote_plus(uri, safe='') + '\n' + str(expiry)
@@ -30,61 +35,61 @@ def generate_sas_token(uri, key_name, key_value):
     encoded_signature = quote_plus(base64.b64encode(signature))
     return f"SharedAccessSignature sr={quote_plus(uri, safe='')}&sig={encoded_signature}&se={str(expiry)}&skn={key_name}"
 
-# --- 단일 Registration 삭제 함수 ---
-def delete_registration(registration_id):
-    resource_uri = f"https://{NAMESPACE}.servicebus.windows.net/{HUB_NAME}/registrations/{registration_id}"
+# --- [핵심] 하나의 문장으로 알림을 보내는 함수 ---
+def send_notification_as_single_message(message: str):
+    """
+    등록된 모든 Apple 기기에게 제목 없는 단일 메시지 알림을 보냅니다.
+
+    :param message: 알림으로 보낼 전체 문장.
+    """
+    resource_uri = f"https://{NAMESPACE}.servicebus.windows.net/{HUB_NAME}/messages"
     url = f"{resource_uri}?api-version={API_VERSION}"
     sas_token = generate_sas_token(resource_uri, SAS_KEY_NAME, SAS_KEY_VALUE)
-    headers = {'Authorization': sas_token, 'If-Match': '*'}
+
+    # 3. [수정] "alert" 딕셔너리에 "body"만 남깁니다.
+    apple_payload = {
+        "aps": {
+            "alert": {
+                "body": message  # title을 제거하고 body에 모든 내용을 담습니다.
+            },
+            "sound": "default",
+            "badge": 1
+        }
+    }
+
+    # 4. HTTP 헤더 설정 (태그 없음)
+    headers = {
+        'Authorization': sas_token,
+        'Content-Type': 'application/json;charset=utf-8',
+        'ServiceBusNotification-Format': 'apple'
+    }
+
+    print(f"단일 메시지 알림 보내기 시작 -> 내용: '{message}'")
     
     try:
-        response = requests.delete(url, headers=headers)
+        response = requests.post(url, headers=headers, data=json.dumps(apple_payload))
         response.raise_for_status()
-        print(f"[성공] Registration ID: {registration_id} 삭제 완료.")
+
+        print(f"[성공] 알림이 성공적으로 전송되었습니다.")
         return True
+
     except requests.exceptions.RequestException as e:
-        print(f"[실패] Registration ID: {registration_id} 삭제 중 오류: {e.response.status_code if e.response else 'N/A'}")
+        print(f"[실패] 알림 전송 중 오류 발생!")
+        print(f"오류 내용: {e.response.text if e.response else e}")
         return False
 
-# --- 모든 Registrations 조회 및 삭제 실행 함수 ---
-def clear_all_registrations():
-    print("모든 Registrations 삭제 작업을 시작합니다...")
-    
-    # 1. 모든 Registrations 목록 조회
-    get_resource_uri = f"https://{NAMESPACE}.servicebus.windows.net/{HUB_NAME}/registrations"
-    get_url = f"{get_resource_uri}?api-version={API_VERSION}"
-    get_sas_token = generate_sas_token(get_resource_uri, SAS_KEY_NAME, SAS_KEY_VALUE)
-    get_headers = {'Authorization': get_sas_token, 'x-ms-version': API_VERSION}
-    
-    try:
-        response = requests.get(get_url, headers=get_headers)
-        response.raise_for_status()
-        
-        xml_root = ET.fromstring(response.content)
-        ns = {'atom': 'http://www.w3.org/2005/Atom', 'content': 'http://schemas.microsoft.com/netservices/2010/10/servicebus/connect'}
-        
-        registrations_to_delete = [desc.text for desc in xml_root.findall('.//content:RegistrationId', ns) if desc.text]
-
-        if not registrations_to_delete:
-            print("삭제할 Registration이 없습니다.")
-            return
-
-        print(f"총 {len(registrations_to_delete)}개의 Registration을 삭제 대상으로 찾았습니다.")
-        
-        # 2. 조회된 목록 기반으로 삭제
-        for reg_id in registrations_to_delete:
-            delete_registration(reg_id)
-            time.sleep(0.1) # API Throttling 방지
-
-        print("\n모든 Registrations 삭제 작업이 완료되었습니다.")
-
-    except requests.exceptions.RequestException as e:
-        print(f"Registration 목록 조회 중 오류 발생: {e.response.text if e.response else e}")
-
-# --- 실행 ---
+# --- 스크립트 실행 부분 ---
 if __name__ == "__main__":
-    answer = input("정말로 모든 Registrations를 삭제하시겠습니까? (yes/no): ")
+    # ⭐️ 여기에 보낼 전체 메시지 내용을 수정하세요! ⭐️
+    
+    full_message = "안녕하세요. 감사합니다. 반가워요. 하지메마시때. 잘 부탁드립니다. 섹스"
+
+    print("--- 보낼 알림 정보 ---")
+    print(f"전체 메시지: {full_message}")
+    print("--------------------")
+
+    answer = input("정말로 이 알림을 모든 Apple 기기에 보내시겠습니까? (yes/no): ")
     if answer.lower() == 'yes':
-        clear_all_registrations()
+        send_notification_as_single_message(full_message)
     else:
-        print("삭제 작업이 취소되었습니다.")
+        print("알림 보내기 작업이 취소되었습니다.")

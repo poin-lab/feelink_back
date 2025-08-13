@@ -1,3 +1,4 @@
+
 # 파일명: notification_service.py
 
 import os
@@ -7,6 +8,7 @@ import hashlib
 import base64
 import httpx  # requests 대신 httpx를 임포트합니다.
 import json
+import requests
 from urllib.parse import quote_plus, urlparse
 from dotenv import load_dotenv
 
@@ -69,3 +71,48 @@ async def create_or_update_installation(installation_id, platform, device_token,
             print(f"[실패] 오류 발생! Status Code: {status_code}")
             print(f"오류 내용: {error_text}")
             return False, status_code
+        
+
+
+
+def send_notification_as_single_message(message: str):
+    """
+    등록된 모든 Apple 기기에게 제목 없는 단일 메시지 알림을 보냅니다.
+
+    :param message: 알림으로 보낼 전체 문장.
+    """
+    resource_uri = f"https://{NAMESPACE}.servicebus.windows.net/{HUB_NAME}/messages"
+    url = f"{resource_uri}?api-version={API_VERSION}"
+    sas_token = generate_sas_token(resource_uri, SAS_KEY_NAME, SAS_KEY_VALUE)
+
+    # 3. [수정] "alert" 딕셔너리에 "body"만 남깁니다.
+    apple_payload = {
+        "aps": {
+            "alert": {
+                "body": message  # title을 제거하고 body에 모든 내용을 담습니다.
+            },
+            "sound": "default",
+            "badge": 1
+        }
+    }
+
+    # 4. HTTP 헤더 설정 (태그 없음)
+    headers = {
+        'Authorization': sas_token,
+        'Content-Type': 'application/json;charset=utf-8',
+        'ServiceBusNotification-Format': 'apple'
+    }
+
+    print(f"단일 메시지 알림 보내기 시작 -> 내용: '{message}'")
+    
+    try:
+        response = requests.post(url, headers=headers, data=json.dumps(apple_payload))
+        response.raise_for_status()
+
+        print(f"[성공] 알림이 성공적으로 전송되었습니다.")
+        return True
+
+    except requests.exceptions.RequestException as e:
+        print(f"[실패] 알림 전송 중 오류 발생!")
+        print(f"오류 내용: {e.response.text if e.response else e}")
+        return False
