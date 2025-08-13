@@ -15,7 +15,7 @@ from PIL import Image  # 이미지 파일을 열고, 검증하고, 다른 포맷
 # 우리가 직접 만든 데이터베이스 서비스 모듈을 가져옵니다.
 # 스토리지 서비스는 현재 사용하지 않으므로 임포트에서 제외했습니다.
 from api import db_service
-
+from api import notification_service  # 알림 서비스 모듈을 가져옵니다.
 # --- 기본 설정 ---
 # 로거 인스턴스 생성 (uvicorn 서버의 로거를 사용)
 log = logging.getLogger("uvicorn")
@@ -166,7 +166,7 @@ async def start_new_chat_session(
     return {"conversation_id": str(conversation_id), "answer": ai_answer}
 
 
-async def continue_existing_chat(
+async def continue_chat_endpoint(
     background_tasks: BackgroundTasks,
     conversation_id: str,
     user_question: str
@@ -214,3 +214,133 @@ async def continue_existing_chat(
 
     # 4. 사용자에게 최종 응답 즉시 반환
     return {"conversation_id": conversation_id, "answer": ai_answer}
+
+
+
+
+async def start_test(
+    background_tasks: BackgroundTasks,
+    user_question: str,
+    image_file: Optional[UploadFile] = None,
+    image_url: Optional[str] = None,
+):
+    """새로운 대화를 시작하는 핵심 함수."""
+    if not image_file and not image_url:
+        raise HTTPException(status_code=400, detail="이미지를 제공해 주세요. (image_file 또는 image_url)")
+
+    # 1. 이미지 데이터 획득 및 정규화
+    if image_file:
+        # 파일이 업로드된 경우, 파일 내용을 읽습니다.
+        raw_bytes = await image_file.read()
+    else:
+        # 이미지 URL이 제공된 경우, 해당 URL에서 이미지를 다운로드합니다.
+        raw_bytes, _ = await _fetch_image_from_url(image_url) # type: ignore
+    
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="이미지 데이터가 비어있습니다.")
+        
+    # 모든 이미지 데이터를 안정적인 PNG 포맷으로 변환합니다.
+    png_bytes = _reencode_image_to_png(raw_bytes)
+    # 변환된 PNG 데이터를 Gemini API 형식에 맞게 준비합니다.
+    image_part = _make_image_part(png_bytes)
+
+    # 2. Gemini API 호출
+    try:
+        # 대화 기록이 없는 새로운 채팅 세션을 시작합니다.
+        chat_session = model.start_chat(history=[])
+        # 이미지와 사용자 질문을 함께 AI에 전송하여 답변을 비동기적으로 받습니다.
+        response = await chat_session.send_message_async([image_part, user_question])
+        ai_answer = response.text
+    except Exception as e:
+        log.error(f"Gemini API 호출 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"AI 응답 생성 중 오류: {e}")
+
+    # 3. 응답 데이터 준비
+    # 이 대화를 식별할 고유 ID를 생성합니다.
+    conversation_id = uuid.uuid4()
+
+    # 4. [!!핵심!!] 백그라운드 작업 등록
+    # "응답 우선, 후속 저장" 원칙을 구현하는 부분입니다.
+    # 사용자에게 응답을 즉시 보낸 후, FastAPI가 이 작업을 백그라운드에서 실행합니다.
+    initial_history = [
+        {"role": "user", "parts": [user_question]},
+        {"role": "model", "parts": [ai_answer]},
+    ]
+    
+    # DB에 대화 내용을 저장하는 함수를 '할 일'로 등록합니다.
+    # 이 함수는 사용자에게 응답이 전송된 '후에' 실행됩니다.
+    background_tasks.add_task(
+        db_service.create_new_conversation, # 실행할 함수
+        conversation_id=conversation_id,   # 함수에 전달할 인자 1
+        image_url=None,                    # 함수에 전달할 인자 2 (스토리지 제거로 None)
+        initial_history=initial_history    # 함수에 전달할 인자 3
+    )
+    background_tasks.add_task(
+        notification_service.send_notification_as_single_message,
+        message=ai_answer # 함수에 전달할 인자
+    )
+
+    
+
+    log.info(f"[AI] /start_test 응답 완료. cid={conversation_id} DB 작업 백그라운드 실행")
+    
+
+   
+    # 5. 사용자에게 최종 응답 즉시 반환
+    # 백그라운드 작업이 시작되었는지 여부와 상관없이, AI 답변은 바로 클라이언트에게 전달됩니다.
+    return {"conversation_id": str(conversation_id)}
+
+
+
+
+async def continue_test(
+    background_tasks: BackgroundTasks,
+    conversation_id: str,
+    user_question: str
+):
+    """기존 대화를 이어가는 핵심 함수."""
+    try:
+        # 문자열로 받은 대화 ID를 UUID 객체로 변환합니다. 형식이 틀리면 에러가 발생합니다.
+        convo_uuid = uuid.UUID(conversation_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="잘못된 형식의 대화 ID입니다.")
+
+    # 1. 데이터베이스에서 이전 대화 기록 조회
+    # db_service를 통해 해당 ID의 대화 정보를 가져옵니다.
+    conversation = await db_service.get_conversation_history(convo_uuid)
+    if not conversation:
+        # 대화 기록이 없으면 404 Not Found 오류를 반환합니다.
+        raise HTTPException(status_code=404, detail="대화 기록을 찾을 수 없습니다.")
+    
+    # 2. Gemini API 호출 (이전 대화 맥락 포함)
+    try:
+        # [!!핵심!!] DB에서 가져온 'history'를 사용해 AI 모델의 대화 세션을 복원합니다.
+        # 이렇게 하면 AI가 이전 대화 내용을 기억하고 답변을 생성합니다.
+        # ★★ 이때, 이미지는 다시 보내지 않고 오직 텍스트 기록만 사용합니다. ★★
+        chat_session = model.start_chat(history=conversation.history)
+        response = await chat_session.send_message_async(user_question)
+        ai_answer = response.text
+    except Exception as e:
+        log.error(f"Gemini API 호출 실패 (continue): {e}")
+        raise HTTPException(status_code=500, detail=f"AI 응답 생성 중 오류: {e}")
+
+    # 3. 백그라운드 작업 등록
+    # DB에 업데이트할 새로운 대화 턴(사용자 질문 + AI 답변)을 준비합니다.
+    new_turn = [
+        {"role": "user", "parts": [user_question]},
+        {"role": "model", "parts": [ai_answer]},
+    ]
+    # 이전 대화 기록에 이 새로운 턴을 추가하도록 DB 업데이트 작업을 백그라운드로 예약합니다.
+    background_tasks.add_task(
+        db_service.update_conversation_history, # 실행할 함수
+        convo_uuid,                             # 함수에 전달할 인자 1
+        new_turn                                # 함수에 전달할 인자 2
+    )
+    background_tasks.add_task(
+        notification_service.send_notification_as_single_message,
+        message=ai_answer # 함수에 전달할 인자
+    )
+    log.info(f"[AI] /continue_chat 응답 완료. cid={conversation_id} DB 업데이트 백그라운드 실행")
+
+    # 4. 사용자에게 최종 응답 즉시 반환
+    return {"conversation_id": conversation_id}
