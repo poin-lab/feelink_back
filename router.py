@@ -67,7 +67,7 @@ async def continue_chat_endpoint(
     )
 
     # ai_service 함수를 호출할 때 background_tasks를 전달합니다.
-    return await ai_service.continue_existing_chat(
+    return await ai_service.continue_chat_endpoint(
         background_tasks=background_tasks,
         conversation_id=conversation_id,
         user_question=user_question,
