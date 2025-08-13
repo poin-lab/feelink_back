@@ -6,16 +6,16 @@ from dotenv import load_dotenv
 # --- 1. 환경 변수 로드 및 설정 ---
 load_dotenv()
 
-CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-CONTAINER_NAME = os.getenv("AZURE_STORAGE_CONTAINER_NAME")
+AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+AZURE_STORAGE_CONTAINER_NAME = os.getenv("AZURE_STORAGE_CONTAINER_NAME")
 
-if not CONNECTION_STRING or not CONTAINER_NAME:
+if not AZURE_STORAGE_CONNECTION_STRING or not AZURE_STORAGE_CONTAINER_NAME:
     raise ValueError("AZURE_STORAGE_CONNECTION_STRING 또는 AZURE_STORAGE_CONTAINER_NAME 환경 변수를 확인해주세요.")
 
 # --- 2. Blob 서비스 클라이언트 초기화 ---
 # 모듈이 처음 로드될 때 딱 한 번만 클라이언트를 생성합니다.
 try:
-    blob_service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+    blob_service_client = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
     print("[STORAGE] Azure Blob Storage 서비스 클라이언트 초기화 성공.")
 except Exception as e:
     print(f"[STORAGE] 오류: 스토리지 클라이언트 초기화 실패. 연결 문자열을 확인하세요. - {e}")
@@ -37,7 +37,7 @@ async def upload_image_and_get_url(file_bytes: bytes, original_filename: str) ->
         
         # 모듈 수준의 클라이언트를 직접 사용합니다.
         blob_client = blob_service_client.get_blob_client(
-            container=CONTAINER_NAME,
+            container=AZURE_STORAGE_CONTAINER_NAME,
             blob=blob_name
         )
         
