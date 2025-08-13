@@ -72,38 +72,28 @@ async def start_test(
     background_tasks: BackgroundTasks,
     request: Request,
     user_question: str = Form(...),
-    image_file: Optional[UploadFile] = File(None),
-    image_url: Optional[str] = Form(None),
+    image_file: UploadFile = File(...),
 ):
     """
     새로운 대화를 시작하는 엔드포인트.
     """
-    # 클라이언트가 image_file 필드에 URL을 넣는 경우를 대비한 보정 로직
-    if image_url is None and image_file is None:
-        form = await request.form()
-        maybe_url = form.get("image_url") or form.get("image_file")
-        if isinstance(maybe_url, str) and (
-            maybe_url.startswith("http://") or maybe_url.startswith("https://")
-        ):
-            image_url = maybe_url
+    
 
     log.info(
         f"[ROUTER] /start_chat received from={request.client.host} | "
-        f"file={'yes' if image_file else 'no'} | url={'yes' if image_url else 'no'} | "
+        f"file={'yes' if image_file else 'no'} | "
         f"q_len={len(user_question)}"
     )
 
     # 3. ai_service 함수를 호출할 때, 주입받은 background_tasks를 그대로 전달합니다.
-    return await ai_service.start_new_chat_session(
+    return await ai_service.start_test(
         background_tasks=background_tasks,
         image_file=image_file,
-        user_question=user_question,
-        image_url=image_url,
+        user_question=user_question
     )
 
-
 @router.post("/continue_test")
-async def continue_test(
+async def continue_chat_test(
     # 여기도 마찬가지로 BackgroundTasks를 받도록 수정합니다.
     background_tasks: BackgroundTasks,
     conversation_id: str = Form(...),
@@ -113,7 +103,7 @@ async def continue_test(
     기존 대화를 이어가는 엔드포인트.
     """
     log.info(
-        f"[ROUTER] /continue_test received | cid={conversation_id} | q_len={len(user_question)}"
+        f"[ROUTER] /continue_chat received | cid={conversation_id} | q_len={len(user_question)}"
     )
 
     # ai_service 함수를 호출할 때 background_tasks를 전달합니다.
