@@ -1,10 +1,12 @@
 import logging
+import httpx
 from typing import Optional
 
 # 1. BackgroundTasks를 fastapi에서 임포트해야 합니다.
-from fastapi import APIRouter, BackgroundTasks, File, Form, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, Request, UploadFile, HTTPException
 
 from api import ai_service
+from api import notification_service
 
 # 로거 설정
 log = logging.getLogger("uvicorn")
@@ -70,3 +72,35 @@ async def continue_chat_endpoint(
         conversation_id=conversation_id,
         user_question=user_question,
     )
+
+@router.post("/register_device")
+async def register_device_endpoint(
+    installation_id: str = Form(...),
+    platform: str = Form(...),
+    device_token: str = Form(...),
+    tags: Optional[str] = Form(None),
+):
+    """
+    기기를 Notification Hub에 등록하거나 업데이트하는 엔드포인트.
+    
+    :param installation_id: 기기를 식별하는 고유 ID (예: UUID).
+    :param platform: 'apns' (Apple), 'gcm' (Android/Firebase).
+    :param device_token: APNs 또는 FCM에서 받은 디바이스 푸시 토큰.
+    :param tags: 이 기기에 할당할 태그 리스트 (콤마로 구분된 문자열).
+    """
+    # 태그가 문자열로 전달되면 리스트로 변환
+    tag_list = tags.split(",") if tags else []
+
+    # Notification Hub에 설치 정보를 등록/업데이트
+    success, status_code = await notification_service.create_or_update_installation(
+        installation_id=installation_id,
+        platform=platform,
+        device_token=device_token,
+        tags=tag_list,
+    )       
+
+    if not success:
+        raise HTTPException(status_code=status_code, detail="Installation 등록 실패")
+
+    return {"message": "Installation 등록/업데이트 성공", "status_code": status_code}
+
