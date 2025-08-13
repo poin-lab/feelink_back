@@ -1,39 +1,72 @@
-# router.py
+import logging
+from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, Response, HTTPException
-from fastapi.responses import StreamingResponse
-from api import ai_service # 수정된 ai_service 모듈 임포트
+# 1. BackgroundTasks를 fastapi에서 임포트해야 합니다.
+from fastapi import APIRouter, BackgroundTasks, File, Form, Request, UploadFile
 
+from api import ai_service
+
+# 로거 설정
+log = logging.getLogger("uvicorn")
+
+# APIRouter 인스턴스 생성
 router = APIRouter()
 
-# --- 스트리밍을 지원하는 엔드포인트 ---
-@router.post("/start_chat_stream")
-async def start_chat_stream_endpoint(
-    response: Response, # FastAPI가 헤더 설정을 위해 response 객체를 주입
-    image_file: UploadFile = File(...),
-    user_question: str = Form(...)
+
+@router.post("/start_chat")
+async def start_chat_endpoint(
+    # 2. 엔드포인트 함수가 BackgroundTasks를 파라미터로 받도록 합니다.
+    #    FastAPI가 이 부분을 보고 자동으로 BackgroundTasks 객체를 여기에 넣어줍니다.
+    background_tasks: BackgroundTasks,
+    request: Request,
+    user_question: str = Form(...),
+    image_file: Optional[UploadFile] = File(None),
+    image_url: Optional[str] = Form(None),
 ):
-    # 1. 서비스 로직 호출
-    convo_id, stream_gen = await ai_service.start_new_chat_session_stream(image_file, user_question)
+    """
+    새로운 대화를 시작하는 엔드포인트.
+    """
+    # 클라이언트가 image_file 필드에 URL을 넣는 경우를 대비한 보정 로직
+    if image_url is None and image_file is None:
+        form = await request.form()
+        maybe_url = form.get("image_url") or form.get("image_file")
+        if isinstance(maybe_url, str) and (
+            maybe_url.startswith("http://") or maybe_url.startswith("https://")
+        ):
+            image_url = maybe_url
 
-    # 2. 응답 헤더에 대화 ID 설정
-    response.headers["X-Conversation-ID"] = convo_id
+    log.info(
+        f"[ROUTER] /start_chat received from={request.client.host} | "
+        f"file={'yes' if image_file else 'no'} | url={'yes' if image_url else 'no'} | "
+        f"q_len={len(user_question)}"
+    )
 
-    # 3. 스트리밍 응답 반환
-    return StreamingResponse(stream_gen, media_type="text/plain; charset=utf-8")
+    # 3. ai_service 함수를 호출할 때, 주입받은 background_tasks를 그대로 전달합니다.
+    return await ai_service.start_new_chat_session(
+        background_tasks=background_tasks,
+        image_file=image_file,
+        user_question=user_question,
+        image_url=image_url,
+    )
 
 
-@router.post("/continue_chat_stream")
-async def continue_chat_stream_endpoint(
+@router.post("/continue_chat")
+async def continue_chat_endpoint(
+    # 여기도 마찬가지로 BackgroundTasks를 받도록 수정합니다.
+    background_tasks: BackgroundTasks,
     conversation_id: str = Form(...),
-    user_question: str = Form(...)
+    user_question: str = Form(...),
 ):
-    # 1. 서비스 로직 호출
-    convo_id, stream_gen = await ai_service.continue_existing_chat_stream(conversation_id, user_question)
+    """
+    기존 대화를 이어가는 엔드포인트.
+    """
+    log.info(
+        f"[ROUTER] /continue_chat received | cid={conversation_id} | q_len={len(user_question)}"
+    )
 
-    # 2. 대화 ID 유효성 검사
-    if convo_id is None:
-        raise HTTPException(status_code=404, detail="대화 기록을 찾을 수 없습니다.")
-
-    # 3. 스트리밍 응답 반환 (여기서는 헤더 설정 불필요)
-    return StreamingResponse(stream_gen, media_type="text/plain; charset=utf-8")
+    # ai_service 함수를 호출할 때 background_tasks를 전달합니다.
+    return await ai_service.continue_existing_chat(
+        background_tasks=background_tasks,
+        conversation_id=conversation_id,
+        user_question=user_question,
+    )

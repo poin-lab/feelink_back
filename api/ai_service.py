@@ -1,98 +1,216 @@
-import os
-import uuid
-import google.generativeai as genai
-from fastapi import UploadFile, HTTPException
-from dotenv import load_dotenv
+# --- 외부 라이브러리 임포트 ---
+import io  # 이미지 데이터를 메모리 상에서 바이너리 스트림으로 다루기 위해 사용
+import logging  # 서버 로그를 기록하기 위해 사용
+import os  # 환경 변수(.env)를 읽어오기 위해 사용
+import uuid  # 고유한 대화 ID를 생성하기 위해 사용
+from typing import Optional, Tuple  # 타입 힌팅(코드 명확성)을 위해 사용
 
-from fastapi.responses import StreamingResponse
-import uuid
+import google.generativeai as genai  # Google Gemini AI 모델 사용
+import httpx  # 비동기 HTTP 요청을 보내기 위해 사용 (이미지 URL 다운로드용)
+from dotenv import load_dotenv  # .env 파일에서 환경 변수를 로드하기 위해 사용
+from fastapi import BackgroundTasks, HTTPException, UploadFile  # FastAPI 프레임워크 기능 사용
+from PIL import Image  # 이미지 파일을 열고, 검증하고, 다른 포맷으로 변환하기 위해 사용
 
-# --- 1. Google Gemini 클라이언트 설정 ---
+# --- 내부 모듈 임포트 ---
+# 우리가 직접 만든 데이터베이스 서비스 모듈을 가져옵니다.
+# 스토리지 서비스는 현재 사용하지 않으므로 임포트에서 제외했습니다.
+from api import db_service
+
+# --- 기본 설정 ---
+# 로거 인스턴스 생성 (uvicorn 서버의 로거를 사용)
+log = logging.getLogger("uvicorn")
+# .env 파일에 정의된 환경 변수를 로드
 load_dotenv()
+
+
+# --- 1. Google Gemini AI 클라이언트 설정 ---
+# .env 파일에서 GOOGLE_API_KEY 값을 읽어옵니다.
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+# API 키가 없으면 서버 실행을 중단시켜, 설정 오류를 즉시 인지하도록 합니다.
+if not GOOGLE_API_KEY:
+    raise RuntimeError("GOOGLE_API_KEY 환경변수가 설정되지 않았습니다.")
+# 읽어온 API 키로 Gemini 라이브러리를 초기화합니다.
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# --- 2. '기억'을 저장할 서버 메모리 ---
-conversations_memory = {}
 
-# --- 2.5. 대화 생성 설정 ---
+# --- 2. AI 모델 정의 및 설정 ---
+# 사용할 Gemini 모델을 지정합니다. 'flash'는 빠르고 비용 효율적인 모델입니다.
 model = genai.GenerativeModel(
     model_name='gemini-2.5-flash-lite',
-    
-    # --- 여기가 수정된 부분입니다! (균형 잡힌 버전) ---
-    
-    # --- 여기가 수정된 부분입니다! (방어 강화 버전) ---
-    system_instruction= """
-    너는 시각장애인을 위한 AI 화면 묘사기 'FEELINK'이다. 너의 핵심 임무는 사용자의 질문 의도를 파악하여, 그에 맞는 가장 적절한 형태로 답변하는 것이다.
+    # [!! 시스템 프롬프트 !!] AI의 역할과 정체성을 정의하는 매우 중요한 부분입니다.
+    system_instruction="""
+    너는 시각장애인을 위한 AI 화면 묘사기 'FEELINK'이다. 너의 핵심 임무는 사용자가 화면에 대해 질문하기 전에, 먼저 화면 전체를 내부적으로 분석하여 답변을 준비하는 것이다. 너의 가장 중요한 원칙은 '질문받은 내용에만 답변' 하는 것이며, 분석 내용을 절대 먼저 말하거나 질문과 무관한 정보를 덧붙이지 않는다.
 
-    ### [기본 작동 원리]
+    [작동 방식]
+    1) 내부 분석(출력 금지): 화면의 전체 목적을 파악하고 상/중/하로 나눠 핵심 시각 요소를 정리하되, 이 내용은 답변 준비용으로만 사용한다.
+    2) 질의응답: 질문에 해당하는 정보만 1-2문장으로 간결하게 답한다. 그림 묘사는 질문에 해당하는 요소만. 질문이 없으면 대기.
 
-    1.  **내부 분석 (절대 먼저 말하지 않음):** 너는 항상 화면의 목적과 '상단', '중앙', '하단'의 핵심 요소를 내부적으로 분석하고 완벽하게 기억한다. 이 정보는 오직 답변을 위한 배경 지식이다.
-    2.  **상황별 응답:** 너의 답변 방식은 아래의 '상황별 응답 규칙'에 따라 결정된다.
-
-    ### [상황별 응답 규칙 (매우 중요)]
-
-    #### 규칙 1: '특정 정보' 질문 (기본 응답 모드)
-    사용자의 질문이 **색상, 개수, 텍스트 내용 등 구체적인 정보**를 묻는다면, **오직 그 정보에 대해서만** 한 문장으로 간결하게 답한다. 절대로 상/중/하 구조를 언급하지 않는다.
-
-    *   **예시 1:**
-        *   사용자: "버튼 몇 개야?"
-        *   너: "버튼은 1개 있습니다."
-    *   **예시 2:**
-        *   사용자: "상단에 있는 글씨가 뭐야?"
-        *   너: "상단에는 '로그인'이라고 쓰여 있습니다."
-
-    #### 규칙 2: '전체 구성' 질문 (요약 응답 모드)
-    사용자의 질문이 **"화면 구성 어때?", "전체적으로 설명해줘", "이 화면 뭐야?"** 와 같이 화면 전체에 대한 포괄적인 설명이라면, **그때만 '상단, 중앙, 하단' 구조를 사용하여 요약**한다.
-
-    *   **예시 1:**
-        *   사용자: "지금 화면 구성이 어떻게 돼?"
-        *   너: "이 화면은 로그인 화면입니다. 상단에는 'FEELINK' 로고, 중앙에는 아이디와 비밀번호 입력창, 하단에는 '로그인' 버튼이 있습니다."
-    *   **예시 2:**
-        *   사용자: "화면 설명해줘."
-        *   너: "현재 화면은 설정 메뉴입니다. 상단에는 '설정' 제목, 중앙에는 여러 설정 항목 목록, 하단에는 '저장' 버튼이 배치되어 있습니다."
-
-    ### [절대 규칙]
-    *   **객관적 묘사:** 화면에 보이는 사실만 묘사한다.
-    *   **신속성과 간결성:** 모든 답변은 최대 150토큰 이내로 빠르고 간결하게 유지한다.
-    *   **범위 제한:** 관련 없는 질문에는 "죄송합니다, 저는 화면을 묘사하는 역할만 수행할 수 있습니다."라고만 답한다.
+    [절대 규칙]
+    - 질문 범위 준수(예: '버튼이 몇 개야?' → 개수만).
+    - 내부 분석 내용 공개 금지.
+    - 간결성(150토큰 내).
+    - 추측 금지, 화면에 보이는 사실만.
+    - 화면 묘사와 무관한 질문은 거절.
     """,
-    # ------------------------------------
-    
+    # AI가 생성하는 답변에 대한 제약 조건 설정
     generation_config={
-        "max_output_tokens": 150,
-        "temperature": 0.2 # 유추를 막기 위해 창의성을 0으로 고정
-    }
+        "max_output_tokens": 150,  # 답변의 최대 길이를 150 토큰으로 제한 (간결성 유지)
+        "temperature": 0.2,  # 생성의 무작위성. 낮을수록 AI가 더 사실에 기반하고 일관된 답변을 생성합니다.
+    },
 )
-   
 
-# --- 대화 시작 로직 (예외 처리 없음) ---
-async def start_new_chat_session_stream(image_file: UploadFile, user_question: str):
-    image_data = await image_file.read()
-    image_part = {"mime_type": image_file.content_type, "data": image_data}
-    prompt_parts = [image_part, user_question]
 
-    chat_session = model.start_chat(history=[])
-    conversation_id = str(uuid.uuid4())
-    conversations_memory[conversation_id] = chat_session
+# =====================================================================================
+# 유틸리티 함수 섹션: 이미지 처리 등 보조적인 작업을 수행하는 함수들
+# =====================================================================================
 
-    async def stream_generator():
-        response_stream = await chat_session.send_message_async(prompt_parts, stream=True)
-        async for chunk in response_stream:
-            if text := chunk.text:
-                yield text
+async def _fetch_image_from_url(image_url: str) -> Tuple[bytes, str]:
+    """주어진 URL에서 이미지를 비동기적으로 다운로드합니다."""
+    try:
+        # httpx 클라이언트를 사용하여 비동기로 URL에 GET 요청을 보냅니다.
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(image_url, follow_redirects=True)
+            resp.raise_for_status()  # HTTP 오류 (4xx, 5xx)가 발생하면 예외를 일으킵니다.
+            # 응답 헤더에서 'Content-Type' (e.g., 'image/jpeg')을 추출합니다.
+            content_type = resp.headers.get("content-type", "image/png").split(";")[0].strip().lower()
+            return resp.content, content_type
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=400, detail=f"이미지 URL 다운로드 실패: {e}")
+
+def _reencode_image_to_png(img_bytes: bytes) -> bytes:
+    """
+    이미지 데이터를 PNG 포맷으로 변환(정규화)합니다.
+    - 이유: 다양한 이미지 포맷(JPG, GIF 등)을 일관된 PNG로 통일하여 처리 안정성을 높입니다.
+    - 부가 효과: 유효하지 않은 이미지 데이터일 경우 여기서 오류가 발생하여 사전 검증이 가능합니다.
+    """
+    try:
+        # Pillow 라이브러리로 메모리상의 이미지 바이트를 엽니다.
+        with Image.open(io.BytesIO(img_bytes)) as im:
+            buf = io.BytesIO()  # 새로운 메모리 버퍼를 만듭니다.
+            im.save(buf, format="PNG")  # 버퍼에 이미지를 PNG 형식으로 저장합니다.
+            return buf.getvalue()  # 버퍼의 전체 바이트 데이터를 반환합니다.
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"유효하지 않은 이미지 데이터: {e}")
+
+def _make_image_part(img_bytes: bytes) -> dict:
+    """Gemini API가 요구하는 멀티모달(이미지+텍스트) 입력 형식에 맞게 이미지 데이터를 포장합니다."""
+    return {"mime_type": "image/png", "data": img_bytes}
+
+
+# =====================================================================================
+# 핵심 서비스 핸들러 섹션: API 엔드포인트의 실제 로직을 처리하는 함수들
+# =====================================================================================
+
+async def start_new_chat_session(
+    background_tasks: BackgroundTasks,
+    user_question: str,
+    image_file: Optional[UploadFile] = None,
+    image_url: Optional[str] = None,
+):
+    """새로운 대화를 시작하는 핵심 함수."""
+    if not image_file and not image_url:
+        raise HTTPException(status_code=400, detail="이미지를 제공해 주세요. (image_file 또는 image_url)")
+
+    # 1. 이미지 데이터 획득 및 정규화
+    if image_file:
+        # 파일이 업로드된 경우, 파일 내용을 읽습니다.
+        raw_bytes = await image_file.read()
+    else:
+        # 이미지 URL이 제공된 경우, 해당 URL에서 이미지를 다운로드합니다.
+        raw_bytes, _ = await _fetch_image_from_url(image_url) # type: ignore
     
-    # 라우터에 대화 ID와 스트림 생성기를 함께 반환
-    return conversation_id, stream_generator()
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="이미지 데이터가 비어있습니다.")
+        
+    # 모든 이미지 데이터를 안정적인 PNG 포맷으로 변환합니다.
+    png_bytes = _reencode_image_to_png(raw_bytes)
+    # 변환된 PNG 데이터를 Gemini API 형식에 맞게 준비합니다.
+    image_part = _make_image_part(png_bytes)
 
-# --- 대화 이어가기 로직 (예외 처리 없음) ---
-async def continue_existing_chat(conversation_id: str, user_question: str):
-    if conversation_id not in conversations_memory:
-        # 이 부분은 예외 처리가 아니라, 필수적인 로직 검증입니다.
+    # 2. Gemini API 호출
+    try:
+        # 대화 기록이 없는 새로운 채팅 세션을 시작합니다.
+        chat_session = model.start_chat(history=[])
+        # 이미지와 사용자 질문을 함께 AI에 전송하여 답변을 비동기적으로 받습니다.
+        response = await chat_session.send_message_async([image_part, user_question])
+        ai_answer = response.text
+    except Exception as e:
+        log.error(f"Gemini API 호출 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"AI 응답 생성 중 오류: {e}")
+
+    # 3. 응답 데이터 준비
+    # 이 대화를 식별할 고유 ID를 생성합니다.
+    conversation_id = uuid.uuid4()
+
+    # 4. [!!핵심!!] 백그라운드 작업 등록
+    # "응답 우선, 후속 저장" 원칙을 구현하는 부분입니다.
+    # 사용자에게 응답을 즉시 보낸 후, FastAPI가 이 작업을 백그라운드에서 실행합니다.
+    initial_history = [
+        {"role": "user", "parts": [user_question]},
+        {"role": "model", "parts": [ai_answer]},
+    ]
+    
+    # DB에 대화 내용을 저장하는 함수를 '할 일'로 등록합니다.
+    # 이 함수는 사용자에게 응답이 전송된 '후에' 실행됩니다.
+    background_tasks.add_task(
+        db_service.create_new_conversation, # 실행할 함수
+        conversation_id=conversation_id,   # 함수에 전달할 인자 1
+        image_url=None,                    # 함수에 전달할 인자 2 (스토리지 제거로 None)
+        initial_history=initial_history    # 함수에 전달할 인자 3
+    )
+
+    log.info(f"[AI] /start_chat 응답 완료. cid={conversation_id} DB 작업 백그라운드 실행")
+    
+    # 5. 사용자에게 최종 응답 즉시 반환
+    # 백그라운드 작업이 시작되었는지 여부와 상관없이, AI 답변은 바로 클라이언트에게 전달됩니다.
+    return {"conversation_id": str(conversation_id), "answer": ai_answer}
+
+
+async def continue_existing_chat(
+    background_tasks: BackgroundTasks,
+    conversation_id: str,
+    user_question: str
+):
+    """기존 대화를 이어가는 핵심 함수."""
+    try:
+        # 문자열로 받은 대화 ID를 UUID 객체로 변환합니다. 형식이 틀리면 에러가 발생합니다.
+        convo_uuid = uuid.UUID(conversation_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="잘못된 형식의 대화 ID입니다.")
+
+    # 1. 데이터베이스에서 이전 대화 기록 조회
+    # db_service를 통해 해당 ID의 대화 정보를 가져옵니다.
+    conversation = await db_service.get_conversation_history(convo_uuid)
+    if not conversation:
+        # 대화 기록이 없으면 404 Not Found 오류를 반환합니다.
         raise HTTPException(status_code=404, detail="대화 기록을 찾을 수 없습니다.")
     
-    chat_session = conversations_memory[conversation_id]
-    response = await chat_session.send_message_async(user_question)
-    ai_answer = response.text
-    
-    return {"answer": ai_answer}
+    # 2. Gemini API 호출 (이전 대화 맥락 포함)
+    try:
+        # [!!핵심!!] DB에서 가져온 'history'를 사용해 AI 모델의 대화 세션을 복원합니다.
+        # 이렇게 하면 AI가 이전 대화 내용을 기억하고 답변을 생성합니다.
+        # ★★ 이때, 이미지는 다시 보내지 않고 오직 텍스트 기록만 사용합니다. ★★
+        chat_session = model.start_chat(history=conversation.history)
+        response = await chat_session.send_message_async(user_question)
+        ai_answer = response.text
+    except Exception as e:
+        log.error(f"Gemini API 호출 실패 (continue): {e}")
+        raise HTTPException(status_code=500, detail=f"AI 응답 생성 중 오류: {e}")
+
+    # 3. 백그라운드 작업 등록
+    # DB에 업데이트할 새로운 대화 턴(사용자 질문 + AI 답변)을 준비합니다.
+    new_turn = [
+        {"role": "user", "parts": [user_question]},
+        {"role": "model", "parts": [ai_answer]},
+    ]
+    # 이전 대화 기록에 이 새로운 턴을 추가하도록 DB 업데이트 작업을 백그라운드로 예약합니다.
+    background_tasks.add_task(
+        db_service.update_conversation_history, # 실행할 함수
+        convo_uuid,                             # 함수에 전달할 인자 1
+        new_turn                                # 함수에 전달할 인자 2
+    )
+
+    log.info(f"[AI] /continue_chat 응답 완료. cid={conversation_id} DB 업데이트 백그라운드 실행")
+
+    # 4. 사용자에게 최종 응답 즉시 반환
+    return {"conversation_id": conversation_id, "answer": ai_answer}
