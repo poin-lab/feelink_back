@@ -75,7 +75,7 @@ async def create_or_update_installation(installation_id, platform, device_token,
 
 
 
-def send_notification_as_single_message(message: str):
+def send_notification_as_single_message(message: str, conversation_id: str):
     """
     등록된 모든 Apple 기기에게 제목 없는 단일 메시지 알림을 보냅니다.
 
@@ -93,7 +93,8 @@ def send_notification_as_single_message(message: str):
             },
             "sound": "default",
             "badge": 1,
-            "category": "FEELINK_CHAT"
+            "category": "FEELINK_CHAT",
+            "conversation_id": conversation_id
 
         }
     }
