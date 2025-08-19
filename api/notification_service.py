@@ -92,7 +92,9 @@ def send_notification_as_single_message(message: str):
                 "body": message  # title을 제거하고 body에 모든 내용을 담습니다.
             },
             "sound": "default",
-            "badge": 1
+            "badge": 1,
+            "category": "FEELINK_CHAT"
+
         }
     }
 
