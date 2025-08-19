@@ -289,7 +289,8 @@ async def start_test(
 
     background_tasks.add_task(
         notification_service.send_notification_as_single_message,
-        message=ai_answer # 함수에 전달할 인자
+        message=ai_answer,  # 함수에 전달할 인자
+        conversation_id=conversation_id  # 추가 인자    
     )
 
     log.info(f"[AI] /start_test 응답 완료. cid={conversation_id} DB 작업 백그라운드 실행")
@@ -361,7 +362,8 @@ async def continue_test(
 
     background_tasks.add_task(
         notification_service.send_notification_as_single_message,
-        message=ai_answer # 함수에 전달할 인자
+        message=ai_answer,  # 함수에 전달할 인자
+        conversation_id=conversation_id  # 추가 인자
     )
     log.info(f"[AI] /continue_test 응답 완료. cid={conversation_id} DB 업데이트 백그라운드 실행")
 
