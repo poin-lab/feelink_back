@@ -94,9 +94,9 @@ def send_notification_as_single_message(message: str, conversation_id: str):
             "sound": "default",
             "badge": 1,
             "category": "FEELINK_CHAT",
+        },
             "conversation_id": conversation_id
 
-        }
     }
 
     # 4. HTTP 헤더 설정 (태그 없음)
