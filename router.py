@@ -117,7 +117,7 @@ async def continue_chat_test(
 @router.post("/register_device")
 async def register_device_endpoint(
     installation_id: Optional[str] = Form("123"),
-    platform: Optional[str] = Form("apple"),
+    platform: Optional[str] = Form("apns"),
     device_token: str = Form(...),
     tags: Optional[str] = Form(None),
 ):
