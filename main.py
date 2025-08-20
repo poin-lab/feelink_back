@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from dotenv import load_dotenv
 # 같은 폴더에 있는 router.py 파일에서 'router' 라는 변수를 임포트합니다.
 from router import router
+from router import router as auth_router
 from api import ai_service
 
 
@@ -16,6 +17,7 @@ app = FastAPI(
 
 # router 변수 자체를 포함시킵니다.
 app.include_router(router)
+app.include_router(auth_router)
 
 @app.get("/")
 def health_check():

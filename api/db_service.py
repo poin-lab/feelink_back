@@ -3,7 +3,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Dict, List, Optional, Union
 from uuid import UUID
-
+from datetime import timedelta
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.future import select
-
-from api.models import Conversation  # 우리가 만든 모델을 임포트
+from schema import UserCreate , RefreshToken
+from api.models import Conversation , User  # 우리가 만든 모델을 임포트
 
 # 로거 설정
 log = logging.getLogger("uvicorn")
@@ -105,3 +105,43 @@ async def update_conversation_history(
         await session.commit()
         log.info(f"[DB] 대화 업데이트 완료: cid={conversation_id}")
         return True
+    
+
+# 계정관련
+async def get_user_by_email(session: AsyncSession, email: str) -> Optional[User]:
+    query = select(User).where(User.email == email)
+    async with get_db_session() as session:
+        result = await session.execute(query)
+        user = result.scalar_one_or_none()
+        if user:
+            log.info(f"[DB] 사용자 조회 성공: email={email}")
+            return user
+        else:
+            log.warning(f"[DB] 사용자 조회 실패: email={email} 없음")
+            return None
+        
+
+async def create_user(session: AsyncSession, user_data: UserCreate) -> User:
+    new_user = User(
+        email=user_data.email,
+        hashed_password=user_data.password,
+        is_active=True
+    )
+    async with get_db_session() as session:
+        session.add(new_user)
+        await session.commit()
+        await session.refresh(new_user)
+        log.info(f"[DB] 사용자 생성 완료: email={user_data.email}")
+        return new_user.id
+
+
+async def create_new_refresh_token(session: AsyncSession, user_id: UUID, token: str , expires: timedelta) -> None:
+    new_token = RefreshToken(
+        user_id=user_id,
+        token=token,
+        expires=expires
+    )
+    async with get_db_session() as session:
+        session.add(new_token)
+        await session.commit()
+        log.info(f"[DB] 새 리프레시 토큰 저장 완료: user_id={user_id}")

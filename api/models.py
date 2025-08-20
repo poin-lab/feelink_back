@@ -52,42 +52,10 @@ class User(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
-
-    # 관계 정의 (User 입장에서 자신과 연결된 다른 테이블들을 가리킴)
-    # 'lazy="selectin"'은 User를 조회할 때 관련 fcm_devices와 conversations를 효율적으로 함께 로드하는 옵션입니다.
-    fcm_devices: Mapped[List["FCMDevice"]] = relationship(
-        back_populates="user", cascade="all, delete-orphan", lazy="selectin"
-    )
     conversations: Mapped[List["Conversation"]] = relationship(
         back_populates="user", cascade="all, delete-orphan", lazy="selectin"
     )
 
-
-# ---------------------------------------------------------------------------
-# 3. 'fcm_devices' 테이블 모델
-# ---------------------------------------------------------------------------
-class FCMDevice(Base):
-    __tablename__ = "fcm_devices"
-
-    # 컬럼 정의 (SERIAL은 정수형 PK로 지정하면 자동으로 처리됨)
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
-    fcm_token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
-    device_type: Mapped[Optional[str]] = mapped_column(String(50))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-    # 관계 정의 (FCMDevice 입장에서 자신을 소유한 User를 가리킴)
-    user: Mapped["User"] = relationship(back_populates="fcm_devices")
 
 
 # ---------------------------------------------------------------------------
@@ -119,3 +87,19 @@ class Conversation(Base):
 
     # 관계 정의 (Conversation 입장에서 자신을 소유한 User를 가리킴)
     user: Mapped[Optional["User"]] = relationship(back_populates="conversations")
+
+
+    class RefreshToken(Base):
+        __tablename__ = "refresh_tokens"
+
+        # 컬럼 정의
+        id: Mapped[uuid.UUID] = mapped_column(
+            UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+        )
+        user_id: Mapped[uuid.UUID] = mapped_column(
+            UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+        )
+        token: Mapped[str] = mapped_column(Text, nullable=False)
+        expires: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+        user: Mapped["User"] = relationship(back_populates="refresh_tokens")

@@ -4,7 +4,8 @@ from typing import Optional
 
 # 1. BackgroundTasks를 fastapi에서 임포트해야 합니다.
 from fastapi import APIRouter, BackgroundTasks, File, Form, Request, UploadFile, HTTPException
-
+from fastapi import Depends
+from auth.deps import get_current_user
 from api import ai_service
 from api import notification_service
 
@@ -12,7 +13,7 @@ from api import notification_service
 log = logging.getLogger("uvicorn")
 
 # APIRouter 인스턴스 생성
-router = APIRouter()
+router = APIRouter(prefix="/chat", tags=["Chat"] , dependencies=[Depends(get_current_user)])
 
 
 @router.post("/start_chat")
