@@ -1,0 +1,10 @@
+{
+  "email": "newuser@example.com",
+  "name": "테스트",
+  "password": "password123!",
+  "phonenum": "010-0000-0000"
+}
+
+{"access_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJuZXd1c2VyQGV4YW1wbGUuY29tIiwiZXhwIjoxNzU1NzYwMDc2LCJ0eXBlIjoiYWNjZXNzIn0.M8Sjl6bpji0GnfdNS1IQv6UwvKVL4MJIbgbL1KB0puo",
+"refresh_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJuZXd1c2VyQGV4YW1wbGUuY29tIiwidXNlcl9pZCI6ImNkOTFiMmUxLTI1MTgtNGNjMi1iNjlhLTVjODQyODc1OTJjMiIsImV4cCI6MTc1ODI2NTY3NiwidHlwZSI6InJlZnJlc2gifQ.LIJCg-WxDD3vDSf8qiLgDLhfg9_3z9DNv6zld9ursb4",
+"token_type":"bearer"}

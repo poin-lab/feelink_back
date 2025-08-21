@@ -12,6 +12,7 @@ class SignUpBody(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
 
 
@@ -21,7 +22,7 @@ class UserCreate(BaseModel):
     password: str
     phonenum: str    
 
-class RefreshToken(BaseModel):
+class RefreshTokenCreate(BaseModel):
     user_id: str
     token: str
     expires: timedelta

@@ -1,105 +1,68 @@
-import uuid
-from datetime import datetime
-from typing import List, Optional
+# api/models.py
 
+import uuid
 from sqlalchemy import (
     Boolean,
+    Column,
+    String,
     DateTime,
     ForeignKey,
-    String,
-    Text,
-    func,
-    text,
+    JSON
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.sql import func
 
+Base = declarative_base()
 
-# ---------------------------------------------------------------------------
-# 1. 기본 Base 클래스 정의
-# 모든 모델 클래스가 상속받을 기본 클래스입니다.
-# SQLAlchemy가 이 클래스를 상속받는 모든 클래스를 테이블 모델로 인식하게 합니다.
-# ---------------------------------------------------------------------------
-class Base(DeclarativeBase):
-    # JSONB 컬럼을 Python의 dict 타입으로 매핑하기 위한 기본 설정
-    type_annotation_map = {
-        dict: JSONB
-    }
-
-
-# ---------------------------------------------------------------------------
-# 2. 'users' 테이블 모델
-# ---------------------------------------------------------------------------
 class User(Base):
     __tablename__ = "users"
 
-    # 컬럼 정의
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, nullable=False)
+    phonenum = Column(String, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), 
+        server_default=func.now(), 
+        onupdate=func.now()
     )
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    hashed_password: Mapped[str] = mapped_column(Text, nullable=False)
-    phonenum: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
-    provider: Mapped[str] = mapped_column(String(50), nullable=False, server_default="local")
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="TRUE")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+
+    # 👇 [핵심 수정] RefreshToken과의 양방향 관계를 설정합니다.
+    # 사용자가 삭제될 때 관련 리프레시 토큰도 함께 삭제되도록 cascade 옵션을 추가하는 것이 좋습니다.
+    refresh_tokens = relationship(
+        "RefreshToken", back_populates="user", cascade="all, delete-orphan"
     )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-    conversations: Mapped[List["Conversation"]] = relationship(
-        back_populates="user", cascade="all, delete-orphan", lazy="selectin"
+    conversations = relationship(
+        "Conversation", back_populates="user", cascade="all, delete-orphan"
     )
 
 
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
 
-# ---------------------------------------------------------------------------
-# 4. 'conversations' 테이블 모델
-# ---------------------------------------------------------------------------
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    token = Column(String, unique=True, index=True, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    is_revoked = Column(Boolean, default=False)
+
+    # User 모델의 'refresh_tokens' 속성과 연결됩니다.
+    user = relationship("User", back_populates="refresh_tokens")
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 
-    # 컬럼 정의
-    conversation_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
-    )
-    # 프로토타입 단계에서는 user_id가 없을 수 있으므로 nullable=True로 설정
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
-    )
-    image_url: Mapped[Optional[str]] = mapped_column(Text)
-    # 대화 기록은 JSONB 타입으로 저장 (Python에서는 dict로 처리)
-    history: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
+    # conversation_id를 기본 키로 사용합니다.
+    conversation_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True) # 비회원 대화 허용
+    image_url = Column(String, nullable=True)
+    history = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    # 관계 정의 (Conversation 입장에서 자신을 소유한 User를 가리킴)
-    user: Mapped[Optional["User"]] = relationship(back_populates="conversations")
-
-
-    class RefreshToken(Base):
-        __tablename__ = "refresh_tokens"
-
-        # 컬럼 정의
-        id: Mapped[uuid.UUID] = mapped_column(
-            UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
-        )
-        user_id: Mapped[uuid.UUID] = mapped_column(
-            UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-        )
-        token: Mapped[str] = mapped_column(Text, nullable=False)
-        expires: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-        user: Mapped["User"] = relationship(back_populates="refresh_tokens")
+    user = relationship("User", back_populates="conversations")

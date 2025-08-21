@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from dotenv import load_dotenv
 # 같은 폴더에 있는 router.py 파일에서 'router' 라는 변수를 임포트합니다.
 from router import router
-from router import router as auth_router
+from auth_router import auth_router
 from api import ai_service
 
 

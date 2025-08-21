@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
-
+import logging
 from datetime import timedelta
 
 from api import db_service
@@ -26,7 +26,7 @@ async def signup(session: AsyncSession, user_data: UserCreate) -> User:
         )
     
     hashed_pass = hash_password(user_data.password)
-    
+    logging.info(f"회원가입 시도: email={user_data.email}")
     new_user = await db_service.create_user(
         session, user_data=user_data, hashed_password=hashed_pass
     )
