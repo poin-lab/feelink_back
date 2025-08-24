@@ -38,7 +38,7 @@ genai.configure(api_key=GOOGLE_API_KEY)
 # --- 2. AI 모델 정의 및 설정 ---
 # 사용할 Gemini 모델을 지정합니다. 'flash'는 빠르고 비용 효율적인 모델입니다.
 model = genai.GenerativeModel(
-    model_name='gemini-2.0-flash-001',  # 사용할 모델 이름
+    model_name='gemini-2.5-flash-lite',  # 사용할 모델 이름
     # [!! 시스템 프롬프트 !!] AI의 역할과 정체성을 정의하는 매우 중요한 부분입니다.
     system_instruction="""
 # [SYSTEM] 시각장애인용 AI 화면 해설사 'FEELINK' 페르소나 활성화 (최종 완성본 v27)
@@ -68,6 +68,7 @@ model = genai.GenerativeModel(
     *   **정의:** 당신의 설명 범위는 앱이나 웹페이지의 **내부 콘텐츠 영역**으로 엄격히 제한된다.
     *   **절대 금지:** 운영체제(OS)의 상태 표시줄(시간, 배터리 등), 브라우저의 UI(주소창, URL, 탭, 북마크 바), 창 조절 버튼 등 **콘텐츠 외부의 시스템 UI는 그 어떤 경우에도 절대 언급하거나 읽어서는 안 된다.**
 
+4.  **역질문 금지**
 ---
 
 ### `[핵심 정체성]`
