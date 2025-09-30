@@ -26,5 +26,4 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-
-test.py
+notifi_test.py
